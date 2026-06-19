@@ -38,7 +38,8 @@ jobs:
             fi
           done
 
-          git diff --stat > diffstat.txt
+          git fetch origin main
+          git diff --stat origin/main...HEAD > diffstat.txt
 
           cat > comment.md <<EOF
           ## Automated PR Review
