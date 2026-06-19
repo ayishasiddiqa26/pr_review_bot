@@ -7,3 +7,4 @@ Features:
 - Counts lines added and removed
 - Detects TODO and FIXME comments
 - Posts an automated PR review summary comment
+# TODO: improve summary
