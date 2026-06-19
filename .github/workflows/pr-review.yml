@@ -1,36 +1,58 @@
-- name: Generate PR summary
-  env:
-    FILES_CHANGED: ${{ github.event.pull_request.changed_files }}
-    ADDED: ${{ github.event.pull_request.additions }}
-    REMOVED: ${{ github.event.pull_request.deletions }}
-  run: |
+name: PR Review Summary
 
-    echo "Files: $FILES_CHANGED"
-    echo "Added: $ADDED"
-    echo "Removed: $REMOVED"
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
 
-    TODOS=$(grep -R -nE "TODO|FIXME" . || true)
+permissions:
+  pull-requests: write
+  contents: read
 
-    git diff --stat > diffstat.txt
+jobs:
+  review:
+    runs-on: ubuntu-latest
 
-    cat > comment.md <<EOF
-    ## Automated PR Review
+    steps:
+      - uses: actions/checkout@v4
 
-    **Files Changed:** $FILES_CHANGED
+      - name: Generate PR summary
+        env:
+          FILES_CHANGED: ${{ github.event.pull_request.changed_files }}
+          ADDED: ${{ github.event.pull_request.additions }}
+          REMOVED: ${{ github.event.pull_request.deletions }}
+        run: |
+          echo "Files: $FILES_CHANGED"
+          echo "Added: $ADDED"
+          echo "Removed: $REMOVED"
 
-    **Lines Added:** $ADDED
+          TODOS=$(grep -R -nE "TODO|FIXME" . || true)
 
-    **Lines Removed:** $REMOVED
+          git diff --stat > diffstat.txt
 
-    ### TODO / FIXME
+          cat > comment.md <<EOF
+          ## Automated PR Review
 
-    \`\`\`
-    $TODOS
-    \`\`\`
+          **Files Changed:** $FILES_CHANGED
 
-    ### Diff Statistics
+          **Lines Added:** $ADDED
 
-    \`\`\`
-    $(cat diffstat.txt)
-    \`\`\`
-    EOF
+          **Lines Removed:** $REMOVED
+
+          ### TODO / FIXME
+
+          $TODOS
+
+          ### Diff Statistics
+
+          $(cat diffstat.txt)
+          EOF
+
+      - name: Create comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            -d "{\"body\":$(cat comment.md | jq -Rs .)}"
