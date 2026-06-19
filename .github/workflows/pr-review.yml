@@ -13,62 +13,86 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Generate PR summary
-        env:
-          FILES_CHANGED: ${{ github.event.pull_request.changed_files }}
-          ADDED: ${{ github.event.pull_request.additions }}
-          REMOVED: ${{ github.event.pull_request.deletions }}
         run: |
-          echo "Files: $FILES_CHANGED"
-          echo "Added: $ADDED"
-          echo "Removed: $REMOVED"
-
           git fetch origin main
 
-          TODOS=""
+          FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l | tr -d ' ')
+          ADDED=$(git diff --numstat origin/main...HEAD | awk '{a+=$1} END {print a+0}')
+          REMOVED=$(git diff --numstat origin/main...HEAD | awk '{a+=$2} END {print a+0}')
+          DIFFSTAT=$(git diff --stat origin/main...HEAD)
 
-          for file in $(git diff --name-only origin/main...HEAD)
-          do
+          # Scan only changed files for TODO / FIXME
+          TODOS=""
+          while IFS= read -r file; do
             if [ -f "$file" ]; then
               MATCHES=$(grep -nE "TODO|FIXME" "$file" || true)
-
               if [ -n "$MATCHES" ]; then
-                TODOS="$TODOS\n$file\n$MATCHES\n"
+                TODOS="${TODOS}\n\`$file\`\n\`\`\`\n${MATCHES}\n\`\`\`\n"
               fi
             fi
-          done
+          done < <(git diff --name-only origin/main...HEAD)
 
-          git diff --stat origin/main...HEAD > diffstat.txt
+          if [ -z "$TODOS" ]; then
+            TODOS="_No TODO or FIXME comments found in changed files._"
+          fi
 
-          cat > comment.md <<EOF
-          ## Automated PR Review
+          # Write the comment body to a file so jq can encode it safely
+          {
+            echo "<!-- pr-review-bot -->"
+            echo "## 🤖 Automated PR Review"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| 📁 Files changed | \`$FILES_CHANGED\` |"
+            echo "| ➕ Lines added   | \`$ADDED\` |"
+            echo "| ➖ Lines removed | \`$REMOVED\` |"
+            echo ""
+            echo "### 🔍 TODO / FIXME"
+            echo ""
+            printf "%b" "$TODOS"
+            echo ""
+            echo "### 📊 Diff Statistics"
+            echo ""
+            echo "\`\`\`"
+            echo "$DIFFSTAT"
+            echo "\`\`\`"
+          } > comment.md
 
-          **Files Changed:** $FILES_CHANGED
-
-          **Lines Added:** $ADDED
-
-          **Lines Removed:** $REMOVED
-
-          ### TODO / FIXME
-
-          $TODOS
-
-          ### Diff Statistics
-
-          $(cat diffstat.txt)
-          EOF
-
-      - name: Create comment
+      - name: Post or update PR comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          curl -X POST \
+          BODY=$(jq -Rs . < comment.md)
+
+          # Look for an existing comment left by this workflow (identified by the HTML marker)
+          EXISTING_ID=$(curl -s \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
-            -d "{\"body\":$(cat comment.md | jq -Rs .)}"
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+            | jq '[.[] | select(.body | contains("<!-- pr-review-bot -->"))] | first | .id // empty')
+
+          if [ -n "$EXISTING_ID" ]; then
+            # Update the existing comment
+            echo "Updating existing comment $EXISTING_ID"
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/issues/comments/${EXISTING_ID}" \
+              -d "{\"body\":${BODY}}"
+          else
+            # Create a new comment
+            echo "Creating new comment"
+            curl -s -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -d "{\"body\":${BODY}}"
+          fi
