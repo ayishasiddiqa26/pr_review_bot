@@ -1,98 +1,36 @@
-name: PR Review Summary
+- name: Generate PR summary
+  env:
+    FILES_CHANGED: ${{ github.event.pull_request.changed_files }}
+    ADDED: ${{ github.event.pull_request.additions }}
+    REMOVED: ${{ github.event.pull_request.deletions }}
+  run: |
 
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+    echo "Files: $FILES_CHANGED"
+    echo "Added: $ADDED"
+    echo "Removed: $REMOVED"
 
-permissions:
-  pull-requests: write
-  contents: read
+    TODOS=$(grep -R -nE "TODO|FIXME" . || true)
 
-jobs:
-  review:
-    runs-on: ubuntu-latest
+    git diff --stat > diffstat.txt
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    cat > comment.md <<EOF
+    ## Automated PR Review
 
-      - name: Generate PR summary
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+    **Files Changed:** $FILES_CHANGED
 
-          git fetch origin ${{ github.event.pull_request.base.ref }}
+    **Lines Added:** $ADDED
 
-          FILES_CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD | wc -l)
+    **Lines Removed:** $REMOVED
 
-          ADDED=$(git diff --numstat origin/${{ github.event.pull_request.base.ref }}...HEAD | awk '{a+=$1} END {print a}')
+    ### TODO / FIXME
 
-          REMOVED=$(git diff --numstat origin/${{ github.event.pull_request.base.ref }}...HEAD | awk '{a+=$2} END {print a}')
+    \`\`\`
+    $TODOS
+    \`\`\`
 
-          git diff --stat origin/${{ github.event.pull_request.base.ref }}...HEAD > diffstat.txt
+    ### Diff Statistics
 
-          TODOS=""
-
-          for file in $(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD)
-          do
-            if [ -f "$file" ]; then
-              MATCHES=$(grep -nE "TODO|FIXME" "$file" || true)
-
-              if [ ! -z "$MATCHES" ]; then
-                TODOS="$TODOS\n$file\n$MATCHES\n"
-              fi
-            fi
-          done
-
-          cat > comment.md <<EOF
-          ## Automated PR Review
-
-          **Files Changed:** $FILES_CHANGED
-
-          **Lines Added:** $ADDED
-
-          **Lines Removed:** $REMOVED
-
-          ### TODO / FIXME
-
-          \`\`\`
-          $TODOS
-          \`\`\`
-
-          ### Diff Statistics
-
-          \`\`\`
-          $(cat diffstat.txt)
-          \`\`\`
-          EOF
-
-      - name: Create or update comment
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-
-          COMMENTS=$(curl -s \
-          -H "Authorization: Bearer $GITHUB_TOKEN" \
-          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments)
-
-          COMMENT_ID=$(echo "$COMMENTS" | jq '.[] | select(.body | contains("## Automated PR Review")) | .id' | head -n1)
-
-          if [ -z "$COMMENT_ID" ]; then
-
-            curl -X POST \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
-              -d "{\"body\":$(cat comment.md | jq -Rs .)}"
-
-          else
-
-            curl -X PATCH \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
-              -d "{\"body\":$(cat comment.md | jq -Rs .)}"
-
-          fi
+    \`\`\`
+    $(cat diffstat.txt)
+    \`\`\`
+    EOF
