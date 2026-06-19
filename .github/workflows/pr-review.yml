@@ -25,7 +25,18 @@ jobs:
           echo "Added: $ADDED"
           echo "Removed: $REMOVED"
 
-          TODOS=$(grep -R -nE "TODO|FIXME" . || true)
+          TODOS=""
+
+          for file in $(git diff --name-only origin/main...HEAD)
+          do
+            if [ -f "$file" ]; then
+              MATCHES=$(grep -nE "TODO|FIXME" "$file" || true)
+
+              if [ ! -z "$MATCHES" ]; then
+                TODOS="$TODOS\n$file\n$MATCHES\n"
+              fi
+            fi
+          done
 
           git diff --stat > diffstat.txt
 
